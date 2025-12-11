@@ -43,6 +43,7 @@ const char *mqtt_SUB_controle = "carrinho/controle";
 const char *mqtt_PUB_controle = "carrinho/controle";
 const char *mqtt_SUB_dash = "carrinho/dash";
 const char *mqtt_PUB_dash = "carrinho/dash";
+const char *mqtt_PUB_dados = "carrinho/dados";
 
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
@@ -55,6 +56,7 @@ bool atualizacaoSenha = 0;
 bool senhaAtivado = false;
 bool senhaAtivadoAntes = 0;
 int senha = 0;
+String nomeAutorizado = "";
 String nomeUsuario = "";
 
 enum pinsBotoes
@@ -243,127 +245,142 @@ void Callback(char *topic, byte *payload, unsigned int Length)
 
     if (!doc["nome"].isNull())
     {
-      if (nomeUsuario == "")
+      String nomeRecebido = doc["nome"];
+
+      nomeUsuario = nomeRecebido;
+    }
+  }
+}
+
+  void conectaMQTT()
+  {
+    while (!mqtt.connected())
+    {
+      Serial.print("Conectando ao AWS Iot Core ...");
+
+      if (mqtt.connect(mqtt_id))
       {
-        String nome = doc["nome"];
-        nomeUsuario = nome;
+        Serial.print("conectado.");
+        mqtt.subscribe(mqtt_SUB_controle);
+        mqtt.subscribe(mqtt_SUB_dash);
+      }
+      else
+      {
+        Serial.printf("falhou (%d). Tentando novamente em 5s \n\r", mqtt.state());
+        delay(5000);
       }
     }
   }
-}
 
-void conectaMQTT()
-{
-  while (!mqtt.connected())
+  void programaSenha()
   {
-    Serial.print("Conectando ao AWS Iot Core ...");
+    static int senhaAtualizar = random(1000, 9999);
+    static int segundos = 0;
+    static int minutos = 0;
+    static int intervalo = 0;
+    static int resetar = 0;
 
-    if (mqtt.connect(mqtt_id))
+    static unsigned long tempoAntes = 0;
+    static unsigned long tempoAntes02 = 0;
+    static unsigned long tempoAnterior = 0;
+    unsigned long agora = millis();
+
+    if (senha == senhaAtualizar)
     {
-      Serial.print("conectado.");
-      mqtt.subscribe(mqtt_SUB_controle);
-      mqtt.subscribe(mqtt_SUB_dash);
-    }
-    else
-    {
-      Serial.printf("falhou (%d). Tentando novamente em 5s \n\r", mqtt.state());
-      delay(5000);
-    }
-  }
-}
-
-void programaSenha()
-{
-  static int senhaAtualizar = random(1000, 9999);
-  static int segundos = 0;
-  static int minutos = 0;
-  static int intervalo = 0;
-
-  static unsigned long tempoAntes = 0;
-  static unsigned long tempoAntes02 = 0;
-  unsigned long agora = millis();
-
-  if (senha == senhaAtualizar)
-  {
-
-    if (millis() - tempoAntes > 2000)
-    {
-      if (nomeUsuario == nomeUsuario)
+      if (millis() - tempoAntes > 2000)
       {
         if (!senhaAtivado)
         {
-          minutos += 2; // adiciona 5 minutos só uma vez
+          nomeAutorizado = nomeUsuario;
+          Serial.println("ACESSO LIBERADO PARA: " + nomeAutorizado);
+          
+
+          // +2 minutos
+          minutos += 2;
           senhaAtivado = true;
           atualizacaoSenha = 1;
         }
       }
     }
-  }
 
-  if (agora - tempoAntes02 > 1000)
-  {
-    atualizacaoSenha = 1;
-    --segundos;
+    if (joystick[5].fell())
+      ++resetar;
 
-    if (segundos < 0)
+    if (millis() - tempoAnterior > 3000)
     {
-      --minutos;
-      segundos = 59;
+      if (resetar == 1)
+        resetar = 0;
+
+      tempoAnterior = millis();
     }
 
-    if (minutos < 0)
+    if (resetar >= 2)
     {
-      minutos = 0;
-      segundos = 30;
-
-      senhaAtualizar = random(1000, 9999);
-      senhaAtivado = false;
-      nomeUsuario = "";
+      resetar = 0;
+      minutos -= 2;
+      segundos -= 60;
     }
 
-    tempoAntes02 = agora;
-  }
-
-  if (atualizacaoSenha)
-  {
-    lcd.setCursor(15, 0);
-    lcd.printf("%02d:%02d", minutos, segundos);
-
-    if (!senhaAtivado)
+    if (agora - tempoAntes02 > 1000)
     {
-      lcd.setCursor(0, 1);
-      lcd.printf("Codigo: %d             ", senhaAtualizar);
+      atualizacaoSenha = 1;
+      --segundos;
 
-      lcd.setCursor(0, 3);
-      lcd.print("          ");
-    }
-
-    else
-    {
-      if (nomeUsuario == nomeUsuario)
+      if (segundos < 0)
       {
-        lcd.setCursor(0, 1);
-        lcd.printf("Nome: %s       ", nomeUsuario);
+        --minutos;
+        segundos = 59;
       }
 
-      lcd.setCursor(0, 3);
-      lcd.print("Sucesso!!!");
+      if (minutos < 0)
+      {
+        minutos = 0;
+        segundos = 30;
+
+        senhaAtualizar = random(1000, 9999);
+        senhaAtivado = false;
+            nomeAutorizado = "";
+            nomeUsuario = "";
+      }
+
+      tempoAntes02 = agora;
     }
 
-    JsonDocument doc;
-
-    doc["estado_acesso"] = senhaAtivado;
-
-    String msg;
-
-    if (senhaAtivado != senhaAtivadoAntes)
+    if (atualizacaoSenha)
     {
-      serializeJson(doc, msg);
-      mqtt.publish(mqtt_PUB_dash, msg.c_str());
+      lcd.setCursor(15, 0);
+      lcd.printf("%02d:%02d", minutos, segundos);
 
-      senhaAtivadoAntes = senhaAtivado;
+      if (!senhaAtivado)
+        {
+            lcd.setCursor(0, 1);
+            lcd.printf("Codigo: %d     ", senhaAtualizar);
+            lcd.setCursor(0, 3);
+            lcd.print("              ");
+        }
+        else
+        {
+            lcd.setCursor(0, 1);
+            lcd.printf("Nome: %s     ", nomeAutorizado);
+            lcd.setCursor(0, 3);
+            lcd.print("Sucesso!!!");
+        }
+
+      JsonDocument doc;
+
+      doc["estado_acesso"] = senhaAtivado;
+
+      String msg;
+
+      if (senhaAtivado != senhaAtivadoAntes)
+      {
+        serializeJson(doc, msg);
+        mqtt.publish(mqtt_PUB_dash, msg.c_str());
+        mqtt.publish(mqtt_PUB_dados, msg.c_str());
+
+        senhaAtivadoAntes = senhaAtivado;
+      }
+
+      atualizacaoSenha = 0;
     }
-
-    atualizacaoSenha = 0;
   }
-}
